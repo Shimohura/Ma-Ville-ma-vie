@@ -278,52 +278,150 @@ function parseOSM(els, c) {
   return out;
 }
 
+/* Ressources : lues directement dans les couleurs de la carte (eau, forêt, parc),
+   donc sans dépendre d'un service externe. Commerces : OpenStreetMap (Overpass), si disponible. */
+const TZ = 16;
+const tileCache = new Map();   // "z/x/y" -> liste de ressources | 'loading'
+let osmPlaces = [];
+let placesCache = null;
+try {
+  const c0 = JSON.parse(localStorage.getItem(CKEY));
+  if (c0 && c0.items) { placesCache = c0; osmPlaces = c0.items.filter(i => i.k === 'place'); }
+} catch (e) {}
 let items = [];
-let cache = null;
-try { cache = JSON.parse(localStorage.getItem(CKEY)); if (cache && cache.items) items = cache.items; } catch (e) { cache = null; }
-
-let loading = false, lastFail = 0, dataMsg = '';
-async function ensureData() {
-  if (!S.pos || loading) return;
-  const now = Date.now();
-  if (cache && hav(cache.lat, cache.lng, S.pos.lat, S.pos.lng) < QUERY_R - VISION_R && now - cache.ts < 864e5) return;
-  if (now - lastFail < 60000) return;
-  loading = true; dataMsg = 'Chargement des alentours…'; renderSheet();
-  const c = { lat: S.pos.lat, lng: S.pos.lng };
-  // Zone rectangulaire (bbox) : plus rapide pour Overpass qu'un rayon, et trois petites requêtes qui s'affichent au fil de l'eau.
-  const dLa = QUERY_R / 111320, dLo = QUERY_R / (111320 * Math.cos(c.lat * Math.PI / 180));
-  const bb = [c.lat - dLa, c.lng - dLo, c.lat + dLa, c.lng + dLo].map(v => v.toFixed(5)).join(',');
-  const head = `[out:json][timeout:12][bbox:${bb}];`;
-  const parts = [
-    ['lieux', head + `(node["shop"~"^(bakery|fishmonger)$"];way["shop"~"^(bakery|fishmonger)$"];node["amenity"~"^(cafe|bar|pub|cinema|restaurant|fast_food)$"];way["amenity"~"^(cafe|bar|pub|cinema|restaurant|fast_food)$"];);out center 60;`],
-    ['arbres', head + `node["natural"="tree"];out 30;`],
-    ['zones', head + `(way["natural"="wood"];way["landuse"="forest"];way["waterway"~"^(river|stream|canal)$"];way["natural"~"^(water|coastline)$"];way["leisure"~"^(park|garden)$"];);out geom 40;`]
-  ];
-  const got = {}, errs = [];
-  for (const [name, q] of parts) {
-    dataMsg = 'Chargement des alentours (' + name + ')…'; renderSheet();
-    try {
-      got[name] = await overpass(q);
-      items = parseOSM(Object.values(got).flat(), c);
-      drawItems(); collect();
-    } catch (e) {
-      errs.push(name + ' : ' + e.message);
-      if (!Object.keys(got).length) break; // rien ne répond : inutile d'insister
-    }
-  }
-  if (!errs.length) {
-    cache = { lat: c.lat, lng: c.lng, ts: Date.now(), items };
-    try { localStorage.setItem(CKEY, JSON.stringify(cache)); } catch (e) {}
-    dataMsg = '';
-  } else {
-    lastFail = Date.now() - 30000; // nouvel essai dans ~30 s
-    dataMsg = 'Chargement incomplet — ' + errs.join(' | ');
-  }
-  loading = false;
-  drawItems(); collect(); renderSheet();
+function rebuildItems() {
+  const res = [];
+  tileCache.forEach(v => { if (Array.isArray(v)) res.push(...v); });
+  items = osmPlaces.concat(res);
 }
 
+const COLORS = [
+  ['water', 170, 211, 223],
+  ['forest', 173, 209, 158],
+  ['forest', 174, 223, 163],
+  ['park', 200, 250, 204],
+  ['park', 205, 235, 176],
+  ['park', 200, 215, 171],
+  ['park', 201, 225, 191]
+];
+function classify(r, g, b) {
+  for (const [t, cr, cg, cb] of COLORS) {
+    if ((r - cr) ** 2 + (g - cg) ** 2 + (b - cb) ** 2 <= 144) return t;
+  }
+  return null;
+}
+function hash5(a, b, c, d, e) {
+  let h = 2166136261;
+  for (const v of [a, b, c, d, e]) { h ^= (v + 0x9e3779b9) | 0; h = Math.imul(h, 16777619); h ^= h >>> 13; }
+  return h >>> 0;
+}
+function px2ll(z, x, y, px, py) {
+  const n = 2 ** z;
+  const lng = (x + px / 256) / n * 360 - 180;
+  const lat = Math.atan(Math.sinh(Math.PI * (1 - 2 * (y + py / 256) / n))) * 180 / Math.PI;
+  return [lat, lng];
+}
+function tilesAround(lat, lng, r) {
+  const n = 2 ** TZ;
+  const tx = lo => Math.floor((lo + 180) / 360 * n);
+  const ty = la => { const s = Math.sin(la * Math.PI / 180); return Math.floor((0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * n); };
+  const dLa = r / 111320, dLo = r / (111320 * Math.cos(lat * Math.PI / 180));
+  const out = [];
+  for (let x = tx(lng - dLo); x <= tx(lng + dLo); x++)
+    for (let y = ty(lat + dLa); y <= ty(lat - dLa); y++) out.push([x, y]);
+  return out;
+}
+// grid : cases de 12 px classées par couleur ; renvoie les ressources qui apparaissent sur cette tuile
+function spawnFrom(grid, N, STEP, z, x, y) {
+  const out = [], cnt = { bois: 0, baies: 0, poisson: 0 }, CAP = { bois: 12, baies: 8, poisson: 10 };
+  const at = (i, j) => (i < 0 || j < 0 || i >= N || j >= N) ? undefined : grid[j * N + i];
+  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+    const t = grid[j * N + i];
+    if (!t) continue;
+    const h = hash5(z, x, y, i, j), u = h % 1000;
+    let type = null;
+    if (t === 'water') {
+      const edge = [at(i - 1, j), at(i + 1, j), at(i, j - 1), at(i, j + 1)].some(v => v !== undefined && v !== 'water');
+      if (edge && u < 160) type = 'poisson';
+    } else if (t === 'forest') {
+      if (u < 70) type = 'bois';
+    } else if (t === 'park') {
+      if (u < 40) type = 'baies'; else if (u < 55) type = 'bois';
+    }
+    if (!type || cnt[type] >= CAP[type]) continue;
+    cnt[type]++;
+    const jx = ((h >>> 10) % 7) - 3, jy = ((h >>> 16) % 7) - 3;
+    const [la, lo] = px2ll(z, x, y, i * STEP + STEP / 2 + jx, j * STEP + STEP / 2 + jy);
+    out.push({ id: `t${z}/${x}/${y}/${i}_${j}`, k: 'res', type, lat: la, lng: lo });
+  }
+  return out;
+}
+function analyseTile(img, z, x, y) {
+  const c = document.createElement('canvas'); c.width = c.height = 256;
+  const g = c.getContext('2d', { willReadFrequently: true });
+  g.drawImage(img, 0, 0);
+  const d = g.getImageData(0, 0, 256, 256).data;
+  const STEP = 12, N = Math.floor(256 / STEP), grid = [];
+  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+    const k = ((j * STEP + STEP / 2) * 256 + (i * STEP + STEP / 2)) * 4;
+    grid.push(classify(d[k], d[k + 1], d[k + 2]));
+  }
+  return spawnFrom(grid, N, STEP, z, x, y);
+}
+
+let tileMsg = '', tileFail = 0;
+function loadTile(z, x, y) {
+  const key = z + '/' + x + '/' + y;
+  if (tileCache.has(key)) return;
+  tileCache.set(key, 'loading');
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+  img.onload = () => {
+    try { tileCache.set(key, analyseTile(img, z, x, y)); tileMsg = ''; }
+    catch (e) { tileCache.set(key, []); tileMsg = 'Carte non lisible par le jeu (' + e.name + ').'; }
+    rebuildItems(); drawItems(); collect(); renderSheet();
+  };
+  img.onerror = () => {
+    tileCache.delete(key); tileFail = Date.now();
+    tileMsg = 'Tuile de carte indisponible, nouvel essai automatique.'; renderSheet();
+  };
+  img.src = `https://tile.openstreetmap.org/${z}/${x}/${y}.png`;
+}
+function ensureTiles() {
+  if (!S.pos || Date.now() - tileFail < 20000) return;
+  for (const [x, y] of tilesAround(S.pos.lat, S.pos.lng, VISION_R + 40)) loadTile(TZ, x, y);
+}
+
+let placesLoading = false, placesFail = 0, placesMsg = '';
+const dataMsgNow = () => [tileMsg, placesMsg].filter(Boolean).join(' ');
+function ensureData() { ensureTiles(); ensurePlaces(); }
+async function ensurePlaces() {
+  if (!S.pos || placesLoading) return;
+  const now = Date.now();
+  if (placesCache && hav(placesCache.lat, placesCache.lng, S.pos.lat, S.pos.lng) < QUERY_R - VISION_R && now - placesCache.ts < 864e5) return;
+  if (now - placesFail < 90000) return;
+  placesLoading = true; placesMsg = 'Recherche des commerces…'; renderSheet();
+  const c = { lat: S.pos.lat, lng: S.pos.lng };
+  const dLa = QUERY_R / 111320, dLo = QUERY_R / (111320 * Math.cos(c.lat * Math.PI / 180));
+  const bb = [c.lat - dLa, c.lng - dLo, c.lat + dLa, c.lng + dLo].map(v => v.toFixed(5)).join(',');
+  const q = `[out:json][timeout:12][bbox:${bb}];(node["shop"~"^(bakery|fishmonger)$"];way["shop"~"^(bakery|fishmonger)$"];node["amenity"~"^(cafe|bar|pub|cinema|restaurant|fast_food)$"];way["amenity"~"^(cafe|bar|pub|cinema|restaurant|fast_food)$"];way["leisure"~"^(park|garden)$"];);out geom 80;`;
+  try {
+    const els = await overpass(q);
+    osmPlaces = parseOSM(els, c).filter(i => i.k === 'place');
+    placesCache = { lat: c.lat, lng: c.lng, ts: Date.now(), items: osmPlaces };
+    try { localStorage.setItem(CKEY, JSON.stringify(placesCache)); } catch (e) {}
+    placesMsg = '';
+  } catch (e) {
+    placesFail = Date.now();
+    placesMsg = 'Commerces indisponibles pour le moment, nouvel essai automatique.';
+  }
+  placesLoading = false;
+  rebuildItems(); drawItems(); collect(); renderSheet();
+}
+rebuildItems();
+
 const OVERPASS = [
+  'https://overpass.openstreetmap.fr/api/interpreter',
   'https://overpass-api.de/api/interpreter',
   'https://overpass.private.coffee/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter'
@@ -335,7 +433,7 @@ async function overpass(q) {
   for (let k = 0; k < OVERPASS.length; k++) {
     const i = (goodServer + k) % OVERPASS.length, url = OVERPASS[i];
     const ctl = new AbortController();
-    const to = setTimeout(() => ctl.abort(), 15000);
+    const to = setTimeout(() => ctl.abort(), 12000);
     try {
       const r = await fetch(url, {
         method: 'POST',
@@ -351,7 +449,7 @@ async function overpass(q) {
       return j.elements;
     } catch (e) {
       clearTimeout(to);
-      errs.push(hostOf(url).replace('overpass.', '').replace('overpass-api.de', 'api') + ' ' + (e.name === 'AbortError' ? 'délai' : (e.message || 'réseau')));
+      errs.push(hostOf(url) + ' ' + (e.name === 'AbortError' ? 'délai' : (e.message || 'réseau')));
     }
   }
   throw new Error(errs.join(', '));
@@ -557,8 +655,8 @@ function renderSheet() {
   const st = [];
   if (S.mode === 'gps') st.push(gpsText || 'GPS en attente…');
   else st.push(S.pos ? 'Mode virtuel : touchez la carte pour vous déplacer.' : 'Mode virtuel : touchez la carte pour poser votre personnage.');
-  if (dataMsg) st.push(dataMsg);
-  if (S.pos && !loading) st.push(nearRes + ' ressource' + (nearRes > 1 ? 's' : '') + ' à moins de ' + VISION_R + ' m (' + items.length + ' éléments chargés).');
+  const dm = dataMsgNow(); if (dm) st.push(dm);
+  if (S.pos) st.push(nearRes + ' ressource' + (nearRes > 1 ? 's' : '') + ' à moins de ' + VISION_R + ' m.');
   if (testMsg) st.push('[Test] ' + testMsg);
   h += `<div class="status">${esc(st.join(' '))}</div>`;
 
