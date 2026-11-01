@@ -1,0 +1,579 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Ma Ville, ma vie</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+/* Concept : la carte plein écran est le monde, un bandeau en haut montre ton état, un tiroir en bas liste ce que tu peux faire ici. */
+:root{
+  --bg:#f4f2ea; --fg:#1e2a22; --mut:#5c695f; --card:#ffffff; --line:#d8d4c4;
+  --acc:#2d7a4d; --acc-fg:#ffffff; --warn:#b84a22;
+  --e:#d99a1e; --h:#d4602f; --m:#2f86b0; --s:#8554b0;
+  --pin-res:#c98a1b; --pin-place:#1e2a22;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#16201a; --fg:#e8eee9; --mut:#9bab9f; --card:#1f2c24; --line:#34463a;
+    --acc:#5fbf86; --acc-fg:#0e1a12; --warn:#ff8a5c;
+    --e:#f0b93f; --h:#f0855a; --m:#59b4de; --s:#b48be0;
+    --pin-res:#f0b93f; --pin-place:#e8eee9;
+  }
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overflow:hidden}
+#map{position:fixed;inset:0;background:#dfe6dc}
+button{font:inherit;color:inherit;cursor:pointer}
+button:focus-visible{outline:3px solid var(--acc);outline-offset:2px}
+
+#hud{
+  position:fixed;top:0;left:0;right:0;z-index:1000;
+  padding:max(8px,env(safe-area-inset-top)) max(12px,env(safe-area-inset-right)) 10px max(12px,env(safe-area-inset-left));
+  background:color-mix(in srgb,var(--card) 94%,transparent);
+  border-bottom:1px solid var(--line);
+  backdrop-filter:blur(6px);
+}
+.top{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+#face{font-size:26px;line-height:1}
+#money{font-variant-numeric:tabular-nums;font-size:17px}
+.sp{flex:1}
+#recenter{width:38px;height:38px;border-radius:50%;border:1px solid var(--line);background:var(--card);font-size:18px}
+.bars{display:grid;grid-template-columns:1fr 1fr;gap:6px 14px}
+.bar{min-width:0}
+.bar span{display:flex;justify-content:space-between;font-size:12px;color:var(--mut);letter-spacing:.02em}
+.bar i{display:block;height:8px;border-radius:4px;background:color-mix(in srgb,var(--c) 18%,transparent);overflow:hidden;margin-top:2px}
+.bar b{display:block;height:100%;width:50%;background:var(--c);border-radius:4px;transition:width .5s}
+
+#sheet{
+  position:fixed;left:0;right:0;bottom:0;z-index:1000;max-height:48vh;
+  background:var(--card);border-top:1px solid var(--line);border-radius:16px 16px 0 0;
+  box-shadow:0 -4px 18px #0003;display:flex;flex-direction:column;
+}
+#sheet.min{max-height:44px}
+#handle{border:0;background:none;height:44px;flex:none;display:grid;place-items:center}
+#handle::before{content:"";width:44px;height:5px;border-radius:3px;background:var(--line)}
+#sheetbody{
+  overflow-y:auto;overscroll-behavior:contain;
+  padding:0 max(16px,env(safe-area-inset-right)) max(16px,env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left));
+  display:flex;flex-direction:column;gap:14px;
+}
+#sheet.min #sheetbody{display:none}
+.status{font-size:13px;color:var(--mut)}
+h2{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--mut);margin:0 0 6px;font-weight:600}
+.list{display:flex;flex-direction:column;gap:8px}
+.act{
+  display:flex;flex-direction:column;align-items:flex-start;gap:1px;width:100%;
+  padding:10px 12px;border-radius:10px;border:1px solid var(--acc);background:var(--acc);color:var(--acc-fg);text-align:left;
+}
+.act small{opacity:.9;font-size:12px}
+.act:disabled{background:transparent;color:var(--mut);border-color:var(--line);cursor:default}
+.ghost{background:transparent;color:var(--fg);border:1px solid var(--line);border-radius:10px;padding:8px 12px}
+.inv{display:flex;flex-wrap:wrap;gap:8px}
+.chip{display:flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:999px;padding:4px 6px 4px 10px}
+.chip button{border:0;background:var(--acc);color:var(--acc-fg);border-radius:999px;padding:2px 10px;font-size:13px}
+.seg{display:flex;gap:8px}
+.seg button{flex:1}
+.seg button[aria-pressed="true"]{background:var(--acc);color:var(--acc-fg);border-color:var(--acc)}
+.credit{font-size:11px;color:var(--mut)}
+.note{font-size:13px;color:var(--warn)}
+
+.pin{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;font-size:17px;background:var(--card);border:2px solid var(--pin-res);box-shadow:0 1px 4px #0005}
+.pin.place{border-color:var(--pin-place)}
+.pin.home{border-color:var(--acc);border-width:3px}
+#toast{
+  position:fixed;left:50%;transform:translateX(-50%);top:calc(max(8px,env(safe-area-inset-top)) + 112px);z-index:1200;
+  background:var(--fg);color:var(--bg);padding:8px 14px;border-radius:999px;font-size:14px;opacity:0;pointer-events:none;transition:opacity .25s;max-width:90vw;text-align:center
+}
+#toast.on{opacity:1}
+@media (prefers-reduced-motion:reduce){.bar b,#toast{transition:none}}
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<header id="hud">
+  <div class="top">
+    <span id="face" aria-hidden="true">🙂</span>
+    <strong id="money">0 €</strong>
+    <span class="sp"></span>
+    <button id="recenter" aria-label="Recentrer sur moi">◎</button>
+  </div>
+  <div class="bars">
+    <div class="bar" style="--c:var(--e)"><span>Énergie <em id="v-energy"></em></span><i><b id="b-energy"></b></i></div>
+    <div class="bar" style="--c:var(--h)"><span>Satiété <em id="v-hunger"></em></span><i><b id="b-hunger"></b></i></div>
+    <div class="bar" style="--c:var(--m)"><span>Humeur <em id="v-mood"></em></span><i><b id="b-mood"></b></i></div>
+    <div class="bar" style="--c:var(--s)"><span>Stress <em id="v-stress"></em></span><i><b id="b-stress"></b></i></div>
+  </div>
+</header>
+
+<div id="toast" role="status" aria-live="polite"></div>
+
+<section id="sheet" aria-label="Actions">
+  <button id="handle" aria-label="Réduire ou agrandir le tiroir"></button>
+  <div id="sheetbody"></div>
+</section>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+(() => {
+'use strict';
+
+/* ---------- Réglages ---------- */
+const KEY = 'ma-ville-ma-vie.v1';
+const CKEY = 'ma-ville-ma-vie.osm.v1';
+const ACTION_R = 40;      // zone d'action (m)
+const HOME_R = 120;       // zone du chez-soi (m), car sa position est arrondie
+const VISION_R = 500;     // rayon de visibilité (m)
+const QUERY_R = 650;      // rayon demandé à OpenStreetMap (m)
+const RESPAWN = 4 * 3600e3;
+const MAX_OFFLINE_H = 8;
+
+const ITEMS = {
+  bois:    { icon: '🪵', name: 'Bois',    price: 3, eat: null },
+  poisson: { icon: '🐟', name: 'Poisson', price: 5, eat: { hunger: 25, mood: 2 } },
+  baies:   { icon: '🫐', name: 'Baies',   price: 2, eat: { hunger: 8, mood: 3 } },
+  pain:    { icon: '🥖', name: 'Pain',    price: 1, eat: { hunger: 20 } }
+};
+const PLACES = {
+  bakery:     { icon: '🥖', name: 'Boulangerie' },
+  fishmonger: { icon: '🐠', name: 'Poissonnerie' },
+  cafe:       { icon: '☕', name: 'Café' },
+  bar:        { icon: '🍺', name: 'Bar' },
+  cinema:     { icon: '🎬', name: 'Cinéma' },
+  restaurant: { icon: '🍽️', name: 'Restaurant' },
+  park:       { icon: '🌳', name: 'Parc' }
+};
+const ACTIONS = {
+  bakery:     { label: 'Acheter du pain',    cost: 2,  give: { pain: 1 }, cd: 0 },
+  fishmonger: { label: 'Acheter du poisson', cost: 4,  give: { poisson: 1 }, cd: 0 },
+  cafe:       { label: 'Prendre un café',    cost: 3,  fx: { energy: 8, mood: 5 }, cd: 60 },
+  bar:        { label: 'Boire un verre',     cost: 5,  fx: { mood: 12, stress: -10, energy: -6 }, cd: 120 },
+  cinema:     { label: 'Voir un film',       cost: 10, fx: { mood: 18, stress: -22, energy: -5 }, cd: 240 },
+  restaurant: { label: 'Déjeuner',           cost: 12, fx: { hunger: 55, mood: 6 }, cd: 240 },
+  park:       { label: 'Se poser au parc',   cost: 0,  fx: { stress: -12, energy: 4 }, cd: 90 },
+  sleep:      { label: 'Dormir',             cost: 0,  fx: { energy: 35, stress: -15, hunger: -8 }, cd: 360 }
+};
+const FX_NAMES = { energy: 'énergie', hunger: 'satiété', mood: 'humeur', stress: 'stress' };
+
+/* ---------- État ---------- */
+const defaults = () => ({
+  needs: { energy: 80, hunger: 70, mood: 70, stress: 25 },
+  money: 30, inv: {}, home: null, last: Date.now(),
+  taken: {}, uses: {}, pos: null, mode: 'gps'
+});
+const clamp = (v, a = 0, b = 100) => Math.min(b, Math.max(a, v));
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function load() {
+  try {
+    const s = JSON.parse(localStorage.getItem(KEY));
+    if (s) { const d = defaults(); return Object.assign(d, s, { needs: Object.assign(d.needs, s.needs) }); }
+  } catch (e) {}
+  return defaults();
+}
+function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
+let S = load();
+
+/* ---------- Géométrie ---------- */
+function hav(a, b, c, d) {
+  const R = 6371000, t = Math.PI / 180;
+  const dLa = (c - a) * t, dLo = (d - b) * t;
+  const x = Math.sin(dLa / 2) ** 2 + Math.cos(a * t) * Math.cos(c * t) * Math.sin(dLo / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(x));
+}
+function centroid(g) {
+  let a = 0, b = 0;
+  g.forEach(p => { a += p.lat; b += p.lon; });
+  return [a / g.length, b / g.length];
+}
+function inPoly(lat, lng, g) {
+  let inside = false;
+  for (let i = 0, j = g.length - 1; i < g.length; j = i++) {
+    const yi = g[i].lat, xi = g[i].lon, yj = g[j].lat, xj = g[j].lon;
+    if ((yi > lat) !== (yj > lat) && lng < (xj - xi) * (lat - yi) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+function rng(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+/* ---------- Données OpenStreetMap -> ressources et lieux ---------- */
+function placeKind(t) {
+  if (t.shop === 'bakery') return 'bakery';
+  if (t.shop === 'fishmonger') return 'fishmonger';
+  const a = t.amenity;
+  if (a === 'cafe') return 'cafe';
+  if (a === 'bar' || a === 'pub') return 'bar';
+  if (a === 'cinema') return 'cinema';
+  if (a === 'restaurant' || a === 'fast_food') return 'restaurant';
+  return null;
+}
+
+function parseOSM(els, c) {
+  const out = [];
+  for (const el of els) {
+    const t = el.tags || {};
+    const isNode = el.type === 'node';
+    const g = el.geometry;
+    const tag = el.type[0] + el.id;
+
+    if (isNode && t.natural === 'tree') {
+      out.push({ id: tag, k: 'res', type: 'bois', lat: el.lat, lng: el.lon });
+      continue;
+    }
+    const pk = placeKind(t);
+    if (pk) {
+      const p = isNode ? [el.lat, el.lon] : (g && g.length ? centroid(g) : null);
+      if (p) out.push({ id: 'p' + tag, k: 'place', type: pk, lat: p[0], lng: p[1], name: t.name || '' });
+    }
+    if (isNode || !g || g.length < 3) continue;
+
+    const rand = rng(el.id);
+    const inside = (n, type) => {
+      let made = 0;
+      const lats = g.map(p => p.lat), lons = g.map(p => p.lon);
+      const a = Math.min(...lats), b = Math.max(...lats), l = Math.min(...lons), r = Math.max(...lons);
+      for (let i = 0; i < 60 && made < n; i++) {
+        const la = a + rand() * (b - a), lo = l + rand() * (r - l);
+        if (inPoly(la, lo, g) && hav(c.lat, c.lng, la, lo) < QUERY_R) {
+          out.push({ id: tag + type + made, k: 'res', type, lat: la, lng: lo });
+          made++;
+        }
+      }
+    };
+    const along = (n, type) => {
+      const pts = g.filter(p => hav(c.lat, c.lng, p.lat, p.lon) < QUERY_R);
+      if (!pts.length) return;
+      const step = Math.max(1, Math.floor(pts.length / n));
+      for (let i = 0, m = 0; i < pts.length && m < n; i += step, m++) {
+        out.push({ id: tag + type + m, k: 'res', type, lat: pts[i].lat, lng: pts[i].lon });
+      }
+    };
+
+    if (t.leisure === 'park' || t.leisure === 'garden') {
+      const p = centroid(g);
+      const rad = Math.min(150, Math.max(...g.map(q => hav(p[0], p[1], q.lat, q.lon))));
+      out.push({ id: 'p' + tag, k: 'place', type: 'park', lat: p[0], lng: p[1], name: t.name || '', r: rad });
+      inside(3, 'baies');
+    } else if (t.natural === 'wood' || t.landuse === 'forest') {
+      inside(5, 'bois');
+      inside(2, 'baies');
+    } else if (t.waterway || t.natural === 'water' || t.natural === 'coastline') {
+      along(5, 'poisson');
+    }
+  }
+  return out;
+}
+
+let items = [];
+let cache = null;
+try { cache = JSON.parse(localStorage.getItem(CKEY)); if (cache && cache.items) items = cache.items; } catch (e) { cache = null; }
+
+let loading = false, lastFail = 0, dataMsg = '';
+async function ensureData() {
+  if (!S.pos || loading) return;
+  const now = Date.now();
+  if (cache && hav(cache.lat, cache.lng, S.pos.lat, S.pos.lng) < 250 && now - cache.ts < 864e5) return;
+  if (now - lastFail < 60000) return;
+  loading = true; dataMsg = 'Chargement des alentours…'; renderSheet();
+  const c = { lat: S.pos.lat, lng: S.pos.lng };
+  const a = `(around:${QUERY_R},${c.lat},${c.lng})`;
+  const q = `[out:json][timeout:25];
+node${a}["natural"="tree"]->.trees;
+(way${a}["natural"="wood"];way${a}["landuse"="forest"];way${a}["waterway"~"^(river|stream|canal)$"];way${a}["natural"~"^(water|coastline)$"];way${a}["leisure"~"^(park|garden)$"];)->.areas;
+(node${a}["shop"~"^(bakery|fishmonger)$"];way${a}["shop"~"^(bakery|fishmonger)$"];node${a}["amenity"~"^(cafe|bar|pub|cinema|restaurant|fast_food)$"];way${a}["amenity"~"^(cafe|bar|pub|cinema|restaurant|fast_food)$"];)->.places;
+.trees out 40;
+.areas out geom 60;
+.places out geom 120;`;
+  try {
+    const ctl = new AbortController();
+    const to = setTimeout(() => ctl.abort(), 28000);
+    const r = await fetch('https://overpass-api.de/api/interpreter', {
+      method: 'POST', body: 'data=' + encodeURIComponent(q), signal: ctl.signal
+    });
+    clearTimeout(to);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const j = await r.json();
+    items = parseOSM(j.elements || [], c);
+    cache = { lat: c.lat, lng: c.lng, ts: Date.now(), items };
+    try { localStorage.setItem(CKEY, JSON.stringify(cache)); } catch (e) {}
+    dataMsg = '';
+  } catch (e) {
+    lastFail = Date.now();
+    dataMsg = 'Alentours indisponibles (réseau ou service saturé). Nouvel essai dans 1 min.';
+  }
+  loading = false;
+  drawItems(); collect(); renderSheet();
+}
+
+/* ---------- Carte ---------- */
+const map = L.map('map', { zoomControl: false, attributionControl: false, maxZoom: 19 })
+  .setView(S.pos ? [S.pos.lat, S.pos.lng] : [48.8566, 2.3522], S.pos ? 17 : 13);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+const layer = L.layerGroup().addTo(map);
+let player = null, actionC = null, visionC = null, homeM = null, follow = true;
+
+function ensureMarkers() {
+  if (player) return;
+  visionC = L.circle([0, 0], { radius: VISION_R, color: '#2d7a4d', weight: 1, dashArray: '4 6', fillOpacity: 0.03, interactive: false }).addTo(map);
+  actionC = L.circle([0, 0], { radius: ACTION_R, color: '#2d7a4d', weight: 2, fillOpacity: 0.12, interactive: false }).addTo(map);
+  player = L.circleMarker([0, 0], { radius: 8, color: '#fff', weight: 3, fillColor: '#2d7a4d', fillOpacity: 1, interactive: false }).addTo(map);
+}
+function pin(def, cls) {
+  return L.divIcon({ className: '', html: `<div class="pin ${cls}">${def.icon}</div>`, iconSize: [30, 30], iconAnchor: [15, 15] });
+}
+const isTaken = (it, now) => { const t = S.taken[it.id]; return t && now - t < RESPAWN; };
+
+function drawItems() {
+  layer.clearLayers();
+  if (!S.pos) return;
+  const now = Date.now();
+  for (const it of items) {
+    if (hav(S.pos.lat, S.pos.lng, it.lat, it.lng) > VISION_R) continue;
+    if (it.k === 'res' && isTaken(it, now)) continue;
+    const def = it.k === 'res' ? ITEMS[it.type] : PLACES[it.type];
+    L.marker([it.lat, it.lng], { icon: pin(def, it.k), interactive: false, keyboard: false }).addTo(layer);
+  }
+  if (homeM) map.removeLayer(homeM);
+  homeM = null;
+  if (S.home) {
+    homeM = L.marker([S.home.lat, S.home.lng], { icon: pin({ icon: '🏠' }, 'home'), interactive: false, keyboard: false }).addTo(map);
+  }
+}
+
+/* ---------- Position ---------- */
+let gpsText = '', watchId = null;
+function setPos(lat, lng) {
+  ensureMarkers();
+  const first = !S.pos;
+  S.pos = { lat, lng };
+  player.setLatLng([lat, lng]); actionC.setLatLng([lat, lng]); visionC.setLatLng([lat, lng]);
+  if (first) map.setView([lat, lng], 17);
+  else if (follow) map.panTo([lat, lng], { animate: true });
+  save(); collect(); drawItems(); renderSheet(); ensureData();
+}
+function startGPS() {
+  stopGPS();
+  if (!('geolocation' in navigator)) { gpsText = 'GPS indisponible sur cet appareil.'; return; }
+  gpsText = 'Recherche du GPS…';
+  watchId = navigator.geolocation.watchPosition(
+    p => { gpsText = 'GPS ±' + Math.round(p.coords.accuracy) + ' m'; setPos(p.coords.latitude, p.coords.longitude); },
+    e => {
+      gpsText = e.code === 1
+        ? 'Localisation refusée. Autorisez-la dans le navigateur ou passez en mode virtuel.'
+        : 'Position introuvable pour le moment.';
+      renderSheet();
+    },
+    { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 }
+  );
+}
+function stopGPS() { if (watchId !== null) { navigator.geolocation.clearWatch(watchId); watchId = null; } }
+map.on('click', e => { if (S.mode === 'virtual') setPos(e.latlng.lat, e.latlng.lng); });
+map.on('dragstart', () => { follow = false; });
+
+/* ---------- Règles du jeu ---------- */
+function applyFx(fx) { for (const k in fx) S.needs[k] = clamp(S.needs[k] + fx[k]); }
+
+function tick() {
+  const now = Date.now();
+  const h = Math.min((now - S.last) / 3.6e6, MAX_OFFLINE_H);
+  S.last = now;
+  const n = S.needs, hard = (n.hunger < 20 || n.energy < 15) ? 2 : 1;
+  n.energy = clamp(n.energy - 3 * h);
+  n.hunger = clamp(n.hunger - 5 * h);
+  n.mood = clamp(n.mood - 1.5 * h * hard);
+  n.stress = clamp(n.stress + 1.5 * h);
+  save(); renderHud();
+}
+
+function collect() {
+  if (!S.pos) return;
+  const now = Date.now(), got = [];
+  for (const it of items) {
+    if (it.k !== 'res' || isTaken(it, now)) continue;
+    if (hav(S.pos.lat, S.pos.lng, it.lat, it.lng) <= ACTION_R) {
+      S.taken[it.id] = now;
+      S.inv[it.type] = (S.inv[it.type] || 0) + 1;
+      S.needs.energy = clamp(S.needs.energy - 0.5);
+      got.push(ITEMS[it.type].icon + ' ' + ITEMS[it.type].name);
+    }
+  }
+  if (got.length) { toast('Récolté : ' + got.join(', ')); save(); renderHud(); drawItems(); }
+}
+
+function doAction(key) {
+  const a = ACTIONS[key];
+  if (!a || S.money < a.cost) return;
+  const left = cooldownLeft(key);
+  if (left > 0) return;
+  S.money -= a.cost;
+  if (a.fx) applyFx(a.fx);
+  if (a.give) for (const k in a.give) S.inv[k] = (S.inv[k] || 0) + a.give[k];
+  S.uses[key] = Date.now();
+  toast(a.label + ' ✓');
+  save(); renderHud(); renderSheet();
+}
+function cooldownLeft(key) {
+  const a = ACTIONS[key], t = S.uses[key];
+  if (!a.cd || !t) return 0;
+  return Math.max(0, Math.ceil((a.cd * 60e3 - (Date.now() - t)) / 60e3));
+}
+function eat(k) {
+  const it = ITEMS[k];
+  if (!it || !it.eat || !(S.inv[k] > 0)) return;
+  S.inv[k]--; if (!S.inv[k]) delete S.inv[k];
+  applyFx(it.eat);
+  toast('Miam : ' + it.name);
+  save(); renderHud(); renderSheet();
+}
+function sellAll() {
+  let total = 0;
+  for (const k in S.inv) total += S.inv[k] * ITEMS[k].price;
+  if (!total) return;
+  S.money += total; S.inv = {};
+  toast('Vendu pour ' + total + ' €');
+  save(); renderHud(); renderSheet();
+}
+
+/* ---------- Interface ---------- */
+let toastT = null;
+function toast(msg) {
+  const t = $('toast'); t.textContent = msg; t.classList.add('on');
+  clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('on'), 2400);
+}
+
+function renderHud() {
+  const n = S.needs;
+  for (const k of ['energy', 'hunger', 'mood', 'stress']) {
+    $('b-' + k).style.width = Math.round(n[k]) + '%';
+    $('v-' + k).textContent = Math.round(n[k]);
+  }
+  $('money').textContent = Math.round(S.money) + ' €';
+  const score = (n.energy + n.hunger + n.mood + (100 - n.stress)) / 4;
+  $('face').textContent = score > 70 ? '😄' : score > 50 ? '🙂' : score > 30 ? '😐' : score > 15 ? '😟' : '😵';
+}
+
+const fxText = fx => Object.keys(fx).map(k => (fx[k] > 0 ? '+' : '−') + Math.abs(fx[k]) + ' ' + FX_NAMES[k]).join(' · ');
+function actBtn(key, label, sub, disabled) {
+  return `<button class="act" data-act="act" data-key="${key}"${disabled ? ' disabled' : ''}><b>${esc(label)}</b><small>${esc(sub)}</small></button>`;
+}
+function actionButton(key, place) {
+  const a = ACTIONS[key];
+  const left = cooldownLeft(key);
+  const parts = [];
+  if (a.cost) parts.push(a.cost + ' €');
+  if (a.fx) parts.push(fxText(a.fx));
+  if (a.give) parts.push(Object.keys(a.give).map(k => '+' + a.give[k] + ' ' + ITEMS[k].name.toLowerCase()).join(', '));
+  let sub = parts.join(' · ');
+  let dis = false;
+  if (left > 0) { sub = 'Disponible dans ' + left + ' min'; dis = true; }
+  else if (S.money < a.cost) { sub = 'Il faut ' + a.cost + ' €'; dis = true; }
+  const label = place && place.name ? `${a.label} (${place.name})` : a.label;
+  return actBtn(key, label, sub, dis);
+}
+
+function renderSheet() {
+  let h = '';
+  const nearRes = S.pos ? items.filter(i => i.k === 'res' && !isTaken(i, Date.now()) && hav(S.pos.lat, S.pos.lng, i.lat, i.lng) <= VISION_R).length : 0;
+  const st = [];
+  if (S.mode === 'gps') st.push(gpsText || 'GPS en attente…');
+  else st.push(S.pos ? 'Mode virtuel : touchez la carte pour vous déplacer.' : 'Mode virtuel : touchez la carte pour poser votre personnage.');
+  if (dataMsg) st.push(dataMsg);
+  else if (S.pos) st.push(nearRes + ' ressource' + (nearRes > 1 ? 's' : '') + ' à moins de 500 m.');
+  h += `<div class="status">${esc(st.join(' '))}</div>`;
+
+  if (S.pos && !S.home) {
+    h += `<div><h2>Chez-soi</h2><button class="act" data-act="sethome"><b>Poser mon chez-soi ici</b><small>Position arrondie à environ 100 m, enregistrée seulement sur ce téléphone.</small></button></div>`;
+  }
+
+  if (S.pos) {
+    const seen = new Set(), list = [];
+    for (const p of items) {
+      if (p.k !== 'place' || seen.has(p.type)) continue;
+      if (hav(S.pos.lat, S.pos.lng, p.lat, p.lng) <= Math.max(ACTION_R, p.r || 0)) { seen.add(p.type); list.push(actionButton(p.type, p)); }
+    }
+    if (S.home && hav(S.pos.lat, S.pos.lng, S.home.lat, S.home.lng) <= HOME_R) {
+      list.push(actionButton('sleep', { name: 'chez-soi' }));
+      let total = 0;
+      for (const k in S.inv) total += S.inv[k] * ITEMS[k].price;
+      list.push(actBtn('sell', 'Vendre tout le sac', total ? total + ' €' : 'Le sac est vide', !total).replace('data-act="act"', 'data-act="sell"'));
+    }
+    h += `<div><h2>Ici</h2>${list.length ? `<div class="list">${list.join('')}</div>` : `<div class="status">Rien à faire à portée. Approchez-vous d'un commerce, d'un parc ou de chez vous.</div>`}</div>`;
+  }
+
+  const inv = Object.keys(S.inv);
+  h += `<div><h2>Sac</h2>${inv.length ? `<div class="inv">${inv.map(k => {
+    const it = ITEMS[k];
+    return `<div class="chip"><span>${it.icon} ${it.name} ×${S.inv[k]}</span>${it.eat ? `<button data-act="eat" data-key="${k}">Manger</button>` : ''}</div>`;
+  }).join('')}</div>` : `<div class="status">Vide. Déplacez-vous : les ressources à moins de ${ACTION_R} m sont ramassées toutes seules.</div>`}</div>`;
+
+  h += `<div><h2>Réglages</h2>
+    <div class="seg">
+      <button class="ghost" data-act="mode" data-key="gps" aria-pressed="${S.mode === 'gps'}">GPS réel</button>
+      <button class="ghost" data-act="mode" data-key="virtual" aria-pressed="${S.mode === 'virtual'}">Virtuel</button>
+    </div>
+    <div class="seg" style="margin-top:8px">
+      ${S.home ? `<button class="ghost" data-act="clearhome">Changer de chez-soi</button>` : ''}
+      <button class="ghost" id="reset" data-act="reset">Tout effacer</button>
+    </div></div>`;
+  h += `<div class="credit">Carte et lieux © contributeurs OpenStreetMap.</div>`;
+
+  const body = $('sheetbody');
+  const top = body.scrollTop;
+  body.innerHTML = h;
+  body.scrollTop = top;
+}
+
+let resetT = null;
+$('sheetbody').addEventListener('click', e => {
+  const b = e.target.closest('[data-act]');
+  if (!b || b.disabled) return;
+  const act = b.dataset.act, key = b.dataset.key;
+  if (act === 'act') doAction(key);
+  else if (act === 'eat') eat(key);
+  else if (act === 'sell') sellAll();
+  else if (act === 'sethome' && S.pos) {
+    S.home = { lat: +S.pos.lat.toFixed(3), lng: +S.pos.lng.toFixed(3) };
+    save(); drawItems(); renderSheet(); toast('Chez-soi posé 🏠');
+  }
+  else if (act === 'clearhome') { S.home = null; save(); drawItems(); renderSheet(); }
+  else if (act === 'mode') {
+    S.mode = key; save();
+    if (key === 'gps') startGPS(); else stopGPS();
+    renderSheet();
+  }
+  else if (act === 'reset') {
+    if (b.dataset.armed) {
+      clearTimeout(resetT);
+      try { localStorage.removeItem(KEY); localStorage.removeItem(CKEY); } catch (err) {}
+      location.reload();
+    } else {
+      b.dataset.armed = '1'; b.textContent = 'Confirmer l’effacement';
+      resetT = setTimeout(renderSheet, 4000);
+    }
+  }
+});
+$('handle').addEventListener('click', () => $('sheet').classList.toggle('min'));
+$('recenter').addEventListener('click', () => { follow = true; if (S.pos) map.setView([S.pos.lat, S.pos.lng], Math.max(map.getZoom(), 17)); });
+
+/* ---------- Démarrage ---------- */
+tick();
+if (S.pos) { ensureMarkers(); player.setLatLng([S.pos.lat, S.pos.lng]); actionC.setLatLng([S.pos.lat, S.pos.lng]); visionC.setLatLng([S.pos.lat, S.pos.lng]); }
+drawItems(); renderHud(); renderSheet();
+if (S.mode === 'gps') startGPS();
+setInterval(() => { tick(); ensureData(); renderSheet(); }, 30000);
+ensureData();
+})();
+</script>
+</body>
+</html>
