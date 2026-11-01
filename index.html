@@ -17,9 +17,7 @@
 *{box-sizing:border-box}
 html,body{height:100%}
 body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overflow:hidden}
-#map{position:fixed;inset:0;background:#10181a}
-/* Fond de carte sombre : on inverse les tuiles OpenStreetMap */
-.leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.92) contrast(.88) saturate(.8)}
+#map{position:fixed;inset:0;background:#dfe6dc}
 button{font:inherit;color:inherit;cursor:pointer}
 button:focus-visible{outline:3px solid var(--acc);outline-offset:2px}
 
@@ -238,7 +236,7 @@ function parseOSM(els, c) {
     }
     const pk = placeKind(t);
     if (pk) {
-      const p = isNode ? [el.lat, el.lon] : (g && g.length ? centroid(g) : null);
+      const p = isNode ? [el.lat, el.lon] : el.center ? [el.center.lat, el.center.lon] : (g && g.length ? centroid(g) : null);
       if (p) out.push({ id: 'p' + tag, k: 'place', type: pk, lat: p[0], lng: p[1], name: t.name || '' });
     }
     if (isNode || !g || g.length < 3) continue;
@@ -292,42 +290,41 @@ async function ensureData() {
   if (now - lastFail < 60000) return;
   loading = true; dataMsg = 'Chargement des alentours…'; renderSheet();
   const c = { lat: S.pos.lat, lng: S.pos.lng };
-  const a = `(around:${QUERY_R},${c.lat},${c.lng})`;
-  const head = '[out:json][timeout:20];';
-  // Trois petites requêtes : si l'une échoue, les autres s'affichent quand même.
-  const queries = [
-    head + `node${a}["natural"="tree"];out 40;`,
-    head + `(way${a}["natural"="wood"];way${a}["landuse"="forest"];way${a}["waterway"~"^(river|stream|canal)$"];way${a}["natural"~"^(water|coastline)$"];way${a}["leisure"~"^(park|garden)$"];);out geom 60;`,
-    head + `(node${a}["shop"~"^(bakery|fishmonger)$"];way${a}["shop"~"^(bakery|fishmonger)$"];node${a}["amenity"~"^(cafe|bar|pub|cinema|restaurant|fast_food)$"];way${a}["amenity"~"^(cafe|bar|pub|cinema|restaurant|fast_food)$"];);out geom 120;`
-  ];
-  const res = await Promise.allSettled(queries.map(overpass));
-  const ok = res.filter(r => r.status === 'fulfilled');
-  const bad = res.find(r => r.status === 'rejected');
-  if (ok.length) {
-    items = parseOSM(ok.flatMap(r => r.value), c);
-    if (!bad) {
-      cache = { lat: c.lat, lng: c.lng, ts: Date.now(), items };
-      try { localStorage.setItem(CKEY, JSON.stringify(cache)); } catch (e) {}
-    }
+  // Zone rectangulaire (bbox) : bien plus rapide pour Overpass qu'un rayon « around ».
+  const dLa = QUERY_R / 111320, dLo = QUERY_R / (111320 * Math.cos(c.lat * Math.PI / 180));
+  const bb = [c.lat - dLa, c.lng - dLo, c.lat + dLa, c.lng + dLo].map(v => v.toFixed(5)).join(',');
+  const q = `[out:json][timeout:25][bbox:${bb}];
+node["natural"="tree"]->.trees;
+(way["natural"="wood"];way["landuse"="forest"];way["waterway"~"^(river|stream|canal)$"];way["natural"~"^(water|coastline)$"];way["leisure"~"^(park|garden)$"];)->.areas;
+(node["shop"~"^(bakery|fishmonger)$"];way["shop"~"^(bakery|fishmonger)$"];node["amenity"~"^(cafe|bar|pub|cinema|restaurant|fast_food)$"];way["amenity"~"^(cafe|bar|pub|cinema|restaurant|fast_food)$"];)->.places;
+.trees out 40;
+.areas out geom 60;
+.places out center 120;`;
+  try {
+    const els = await overpass(q);
+    items = parseOSM(els, c);
+    cache = { lat: c.lat, lng: c.lng, ts: Date.now(), items };
+    try { localStorage.setItem(CKEY, JSON.stringify(cache)); } catch (e) {}
+    dataMsg = '';
+  } catch (e) {
+    lastFail = Date.now() - 30000; // nouvel essai dans ~30 s
+    dataMsg = 'Alentours non chargés : ' + e.message + '. Nouvel essai bientôt.';
   }
-  if (bad) {
-    lastFail = Date.now() - 40000; // nouvel essai dans ~20 s
-    dataMsg = 'Chargement incomplet (' + (bad.reason && bad.reason.message || 'erreur réseau') + '). Nouvel essai bientôt.';
-  } else dataMsg = '';
   loading = false;
   drawItems(); collect(); renderSheet();
 }
 
 const OVERPASS = [
   'https://overpass-api.de/api/interpreter',
-  'https://overpass.kumi.systems/api/interpreter',
-  'https://overpass.private.coffee/api/interpreter'
+  'https://overpass.private.coffee/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter'
 ];
 async function overpass(q) {
-  let lastErr = null;
+  const errs = [];
   for (const url of OVERPASS) {
+    const host = url.split('/')[2].replace('overpass.', '').replace('.systems', '').replace('-api.de', '');
     const ctl = new AbortController();
-    const to = setTimeout(() => ctl.abort(), 22000);
+    const to = setTimeout(() => ctl.abort(), 30000);
     try {
       const r = await fetch(url, {
         method: 'POST',
@@ -338,13 +335,14 @@ async function overpass(q) {
       clearTimeout(to);
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const j = await r.json();
-      return j.elements || [];
+      if (!Array.isArray(j.elements)) throw new Error('réponse vide');
+      return j.elements;
     } catch (e) {
       clearTimeout(to);
-      lastErr = e.name === 'AbortError' ? new Error('délai dépassé') : e;
+      errs.push(host + ' ' + (e.name === 'AbortError' ? 'délai' : (e.message || 'réseau')));
     }
   }
-  throw lastErr || new Error('erreur réseau');
+  throw new Error(errs.join(' ; '));
 }
 
 /* ---------- Carte ---------- */
@@ -356,9 +354,9 @@ let player = null, actionC = null, visionC = null, homeM = null, follow = true;
 
 function ensureMarkers() {
   if (player) return;
-  visionC = L.circle([0, 0], { radius: VISION_R, color: '#5fbf86', weight: 1, dashArray: '4 6', fillOpacity: 0.03, interactive: false }).addTo(map);
-  actionC = L.circle([0, 0], { radius: ACTION_R, color: '#5fbf86', weight: 2, fillOpacity: 0.12, interactive: false }).addTo(map);
-  player = L.circleMarker([0, 0], { radius: 8, color: '#fff', weight: 3, fillColor: '#5fbf86', fillOpacity: 1, interactive: false }).addTo(map);
+  visionC = L.circle([0, 0], { radius: VISION_R, color: '#1f7a45', weight: 1, dashArray: '4 6', fillOpacity: 0.03, interactive: false }).addTo(map);
+  actionC = L.circle([0, 0], { radius: ACTION_R, color: '#1f7a45', weight: 2, fillOpacity: 0.12, interactive: false }).addTo(map);
+  player = L.circleMarker([0, 0], { radius: 8, color: '#fff', weight: 3, fillColor: '#1f7a45', fillOpacity: 1, interactive: false }).addTo(map);
 }
 function pin(def, cls) {
   return L.divIcon({ className: '', html: `<div class="pin ${cls}">${def.icon}</div>`, iconSize: [30, 30], iconAnchor: [15, 15] });
@@ -520,7 +518,7 @@ function renderSheet() {
   if (S.mode === 'gps') st.push(gpsText || 'GPS en attente…');
   else st.push(S.pos ? 'Mode virtuel : touchez la carte pour vous déplacer.' : 'Mode virtuel : touchez la carte pour poser votre personnage.');
   if (dataMsg) st.push(dataMsg);
-  else if (S.pos) st.push(nearRes + ' ressource' + (nearRes > 1 ? 's' : '') + ' à moins de 500 m.');
+  if (S.pos && !loading) st.push(nearRes + ' ressource' + (nearRes > 1 ? 's' : '') + ' à moins de 500 m (' + items.length + ' éléments chargés).');
   h += `<div class="status">${esc(st.join(' '))}</div>`;
 
   if (S.pos && !S.home) {
