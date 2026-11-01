@@ -128,8 +128,8 @@ const KEY = 'ma-ville-ma-vie.v1';
 const CKEY = 'ma-ville-ma-vie.osm.v1';
 const ACTION_R = 40;      // zone d'action (m)
 const HOME_R = 120;       // zone du chez-soi (m), car sa position est arrondie
-const VISION_R = 500;     // rayon de visibilité (m)
-const QUERY_R = 650;      // rayon demandé à OpenStreetMap (m)
+const VISION_R = 300;     // rayon de visibilité (m)
+const QUERY_R = 450;      // rayon demandé à OpenStreetMap (m)
 const RESPAWN = 4 * 3600e3;
 const MAX_OFFLINE_H = 8;
 
@@ -286,29 +286,38 @@ let loading = false, lastFail = 0, dataMsg = '';
 async function ensureData() {
   if (!S.pos || loading) return;
   const now = Date.now();
-  if (cache && hav(cache.lat, cache.lng, S.pos.lat, S.pos.lng) < 250 && now - cache.ts < 864e5) return;
+  if (cache && hav(cache.lat, cache.lng, S.pos.lat, S.pos.lng) < QUERY_R - VISION_R && now - cache.ts < 864e5) return;
   if (now - lastFail < 60000) return;
   loading = true; dataMsg = 'Chargement des alentours…'; renderSheet();
   const c = { lat: S.pos.lat, lng: S.pos.lng };
-  // Zone rectangulaire (bbox) : bien plus rapide pour Overpass qu'un rayon « around ».
+  // Zone rectangulaire (bbox) : plus rapide pour Overpass qu'un rayon, et trois petites requêtes qui s'affichent au fil de l'eau.
   const dLa = QUERY_R / 111320, dLo = QUERY_R / (111320 * Math.cos(c.lat * Math.PI / 180));
   const bb = [c.lat - dLa, c.lng - dLo, c.lat + dLa, c.lng + dLo].map(v => v.toFixed(5)).join(',');
-  const q = `[out:json][timeout:25][bbox:${bb}];
-node["natural"="tree"]->.trees;
-(way["natural"="wood"];way["landuse"="forest"];way["waterway"~"^(river|stream|canal)$"];way["natural"~"^(water|coastline)$"];way["leisure"~"^(park|garden)$"];)->.areas;
-(node["shop"~"^(bakery|fishmonger)$"];way["shop"~"^(bakery|fishmonger)$"];node["amenity"~"^(cafe|bar|pub|cinema|restaurant|fast_food)$"];way["amenity"~"^(cafe|bar|pub|cinema|restaurant|fast_food)$"];)->.places;
-.trees out 40;
-.areas out geom 60;
-.places out center 120;`;
-  try {
-    const els = await overpass(q);
-    items = parseOSM(els, c);
+  const head = `[out:json][timeout:12][bbox:${bb}];`;
+  const parts = [
+    ['lieux', head + `(node["shop"~"^(bakery|fishmonger)$"];way["shop"~"^(bakery|fishmonger)$"];node["amenity"~"^(cafe|bar|pub|cinema|restaurant|fast_food)$"];way["amenity"~"^(cafe|bar|pub|cinema|restaurant|fast_food)$"];);out center 60;`],
+    ['arbres', head + `node["natural"="tree"];out 30;`],
+    ['zones', head + `(way["natural"="wood"];way["landuse"="forest"];way["waterway"~"^(river|stream|canal)$"];way["natural"~"^(water|coastline)$"];way["leisure"~"^(park|garden)$"];);out geom 40;`]
+  ];
+  const got = {}, errs = [];
+  for (const [name, q] of parts) {
+    dataMsg = 'Chargement des alentours (' + name + ')…'; renderSheet();
+    try {
+      got[name] = await overpass(q);
+      items = parseOSM(Object.values(got).flat(), c);
+      drawItems(); collect();
+    } catch (e) {
+      errs.push(name + ' : ' + e.message);
+      if (!Object.keys(got).length) break; // rien ne répond : inutile d'insister
+    }
+  }
+  if (!errs.length) {
     cache = { lat: c.lat, lng: c.lng, ts: Date.now(), items };
     try { localStorage.setItem(CKEY, JSON.stringify(cache)); } catch (e) {}
     dataMsg = '';
-  } catch (e) {
+  } else {
     lastFail = Date.now() - 30000; // nouvel essai dans ~30 s
-    dataMsg = 'Alentours non chargés : ' + e.message + '. Nouvel essai bientôt.';
+    dataMsg = 'Chargement incomplet — ' + errs.join(' | ');
   }
   loading = false;
   drawItems(); collect(); renderSheet();
@@ -319,12 +328,14 @@ const OVERPASS = [
   'https://overpass.private.coffee/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter'
 ];
+const hostOf = url => url.split('/')[2];
+let goodServer = 0;
 async function overpass(q) {
   const errs = [];
-  for (const url of OVERPASS) {
-    const host = url.split('/')[2].replace('overpass.', '').replace('.systems', '').replace('-api.de', '');
+  for (let k = 0; k < OVERPASS.length; k++) {
+    const i = (goodServer + k) % OVERPASS.length, url = OVERPASS[i];
     const ctl = new AbortController();
-    const to = setTimeout(() => ctl.abort(), 30000);
+    const to = setTimeout(() => ctl.abort(), 15000);
     try {
       const r = await fetch(url, {
         method: 'POST',
@@ -336,13 +347,34 @@ async function overpass(q) {
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const j = await r.json();
       if (!Array.isArray(j.elements)) throw new Error('réponse vide');
+      goodServer = i;
       return j.elements;
     } catch (e) {
       clearTimeout(to);
-      errs.push(host + ' ' + (e.name === 'AbortError' ? 'délai' : (e.message || 'réseau')));
+      errs.push(hostOf(url).replace('overpass.', '').replace('overpass-api.de', 'api') + ' ' + (e.name === 'AbortError' ? 'délai' : (e.message || 'réseau')));
     }
   }
-  throw new Error(errs.join(' ; '));
+  throw new Error(errs.join(', '));
+}
+
+let testMsg = '';
+async function testServers() {
+  testMsg = 'Test en cours…'; renderSheet();
+  const out = [];
+  for (const url of OVERPASS) {
+    const t0 = performance.now();
+    const ctl = new AbortController();
+    const to = setTimeout(() => ctl.abort(), 8000);
+    try {
+      const r = await fetch(url + '?data=' + encodeURIComponent('[out:json][timeout:5];node(1);out;'), { signal: ctl.signal });
+      clearTimeout(to);
+      out.push(hostOf(url) + ' : ' + (r.ok ? 'OK ' : 'HTTP ' + r.status + ' ') + Math.round(performance.now() - t0) + ' ms');
+    } catch (e) {
+      clearTimeout(to);
+      out.push(hostOf(url) + ' : ' + (e.name === 'AbortError' ? 'pas de réponse en 8 s' : (e.message || 'bloqué')));
+    }
+  }
+  testMsg = out.join(' — '); renderSheet();
 }
 
 /* ---------- Carte ---------- */
@@ -371,7 +403,15 @@ function drawItems() {
     if (hav(S.pos.lat, S.pos.lng, it.lat, it.lng) > VISION_R) continue;
     if (it.k === 'res' && isTaken(it, now)) continue;
     const def = it.k === 'res' ? ITEMS[it.type] : PLACES[it.type];
-    L.marker([it.lat, it.lng], { icon: pin(def, it.k), interactive: false, keyboard: false }).addTo(layer);
+    const d = Math.round(hav(S.pos.lat, S.pos.lng, it.lat, it.lng));
+    const act = it.k === 'place' ? ACTIONS[it.type] : null;
+    const info = it.k === 'res'
+      ? 'À ramasser en passant à moins de ' + ACTION_R + ' m.'
+      : (act ? esc(act.label) + (act.cost ? ' · ' + act.cost + ' €' : '') + '<br>Approchez-vous à moins de ' + Math.max(ACTION_R, it.r || 0) + ' m.' : '');
+    const title = it.k === 'res' ? def.name : (it.name || def.name);
+    L.marker([it.lat, it.lng], { icon: pin(def, it.k), keyboard: false })
+      .bindPopup(`<b>${def.icon} ${esc(title)}</b><br>${esc(def.name !== title ? def.name + ' · ' : '')}${d} m<br>${info}`)
+      .addTo(layer);
   }
   if (homeM) map.removeLayer(homeM);
   homeM = null;
@@ -518,7 +558,8 @@ function renderSheet() {
   if (S.mode === 'gps') st.push(gpsText || 'GPS en attente…');
   else st.push(S.pos ? 'Mode virtuel : touchez la carte pour vous déplacer.' : 'Mode virtuel : touchez la carte pour poser votre personnage.');
   if (dataMsg) st.push(dataMsg);
-  if (S.pos && !loading) st.push(nearRes + ' ressource' + (nearRes > 1 ? 's' : '') + ' à moins de 500 m (' + items.length + ' éléments chargés).');
+  if (S.pos && !loading) st.push(nearRes + ' ressource' + (nearRes > 1 ? 's' : '') + ' à moins de ' + VISION_R + ' m (' + items.length + ' éléments chargés).');
+  if (testMsg) st.push('[Test] ' + testMsg);
   h += `<div class="status">${esc(st.join(' '))}</div>`;
 
   if (S.pos && !S.home) {
@@ -552,6 +593,7 @@ function renderSheet() {
       <button class="ghost" data-act="mode" data-key="virtual" aria-pressed="${S.mode === 'virtual'}">Virtuel</button>
     </div>
     <div class="seg" style="margin-top:8px">
+      <button class="ghost" data-act="test">Tester la connexion</button>
       ${S.home ? `<button class="ghost" data-act="clearhome">Changer de chez-soi</button>` : ''}
       <button class="ghost" id="reset" data-act="reset">Tout effacer</button>
     </div></div>`;
@@ -575,6 +617,7 @@ $('sheetbody').addEventListener('click', e => {
     S.home = { lat: +S.pos.lat.toFixed(3), lng: +S.pos.lng.toFixed(3) };
     save(); drawItems(); renderSheet(); toast('Chez-soi posé 🏠');
   }
+  else if (act === 'test') testServers();
   else if (act === 'clearhome') { S.home = null; save(); drawItems(); renderSheet(); }
   else if (act === 'mode') {
     S.mode = key; save();
