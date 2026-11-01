@@ -8,58 +8,61 @@
 <style>
 /* Concept : la carte plein écran est le monde, un bandeau en haut montre ton état, un tiroir en bas liste ce que tu peux faire ici. */
 :root{
-  --bg:#f4f2ea; --fg:#1e2a22; --mut:#5c695f; --card:#ffffff; --line:#d8d4c4;
-  --acc:#2d7a4d; --acc-fg:#ffffff; --warn:#b84a22;
-  --e:#d99a1e; --h:#d4602f; --m:#2f86b0; --s:#8554b0;
-  --pin-res:#c98a1b; --pin-place:#1e2a22;
-}
-@media (prefers-color-scheme:dark){
-  :root{
-    --bg:#16201a; --fg:#e8eee9; --mut:#9bab9f; --card:#1f2c24; --line:#34463a;
-    --acc:#5fbf86; --acc-fg:#0e1a12; --warn:#ff8a5c;
-    --e:#f0b93f; --h:#f0855a; --m:#59b4de; --s:#b48be0;
-    --pin-res:#f0b93f; --pin-place:#e8eee9;
-  }
+  color-scheme:dark;
+  --bg:#121b16; --fg:#e8eee9; --mut:#9bab9f; --card:#1b271f; --line:#33453a;
+  --acc:#5fbf86; --acc-fg:#0e1a12; --warn:#ff8a5c;
+  --e:#f0b93f; --h:#f0855a; --m:#59b4de; --s:#b48be0;
+  --pin-res:#f0b93f; --pin-place:#e8eee9;
 }
 *{box-sizing:border-box}
 html,body{height:100%}
 body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overflow:hidden}
-#map{position:fixed;inset:0;background:#dfe6dc}
+#map{position:fixed;inset:0;background:#10181a}
+/* Fond de carte sombre : on inverse les tuiles OpenStreetMap */
+.leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.92) contrast(.88) saturate(.8)}
 button{font:inherit;color:inherit;cursor:pointer}
 button:focus-visible{outline:3px solid var(--acc);outline-offset:2px}
 
 #hud{
   position:fixed;top:0;left:0;right:0;z-index:1000;
-  padding:max(8px,env(safe-area-inset-top)) max(12px,env(safe-area-inset-right)) 10px max(12px,env(safe-area-inset-left));
+  padding:max(6px,env(safe-area-inset-top)) max(12px,env(safe-area-inset-right)) 7px max(12px,env(safe-area-inset-left));
   background:color-mix(in srgb,var(--card) 94%,transparent);
   border-bottom:1px solid var(--line);
   backdrop-filter:blur(6px);
 }
-.top{display:flex;align-items:center;gap:10px;margin-bottom:8px}
-#face{font-size:26px;line-height:1}
-#money{font-variant-numeric:tabular-nums;font-size:17px}
+.top{display:flex;align-items:center;gap:8px;margin-bottom:5px}
+#face{font-size:22px;line-height:1}
+#money{font-variant-numeric:tabular-nums;font-size:16px}
 .sp{flex:1}
-#recenter{width:38px;height:38px;border-radius:50%;border:1px solid var(--line);background:var(--card);font-size:18px}
-.bars{display:grid;grid-template-columns:1fr 1fr;gap:6px 14px}
+#music[aria-pressed="false"]{opacity:.45;text-decoration:line-through}
+.round{width:34px;height:34px;border-radius:50%;border:1px solid var(--line);background:var(--card);font-size:16px;padding:0}
+.bars{display:grid;grid-template-columns:repeat(4,1fr);gap:4px 10px}
+@media (max-width:340px){.bars{grid-template-columns:1fr 1fr}}
 .bar{min-width:0}
-.bar span{display:flex;justify-content:space-between;font-size:12px;color:var(--mut);letter-spacing:.02em}
-.bar i{display:block;height:8px;border-radius:4px;background:color-mix(in srgb,var(--c) 18%,transparent);overflow:hidden;margin-top:2px}
+.bar span{display:flex;justify-content:space-between;font-size:11px;color:var(--mut);letter-spacing:.01em;white-space:nowrap}
+.bar span em{font-style:normal;font-variant-numeric:tabular-nums}
+.bar i{display:block;height:6px;border-radius:3px;background:color-mix(in srgb,var(--c) 20%,transparent);overflow:hidden;margin-top:2px}
 .bar b{display:block;height:100%;width:50%;background:var(--c);border-radius:4px;transition:width .5s}
 
 #sheet{
-  position:fixed;left:0;right:0;bottom:0;z-index:1000;max-height:48vh;
+  position:fixed;left:0;right:0;bottom:0;z-index:1000;max-height:38vh;
   background:var(--card);border-top:1px solid var(--line);border-radius:16px 16px 0 0;
-  box-shadow:0 -4px 18px #0003;display:flex;flex-direction:column;
+  box-shadow:0 -4px 18px #0006;display:flex;flex-direction:column;
 }
-#sheet.min{max-height:44px}
-#handle{border:0;background:none;height:44px;flex:none;display:grid;place-items:center}
-#handle::before{content:"";width:44px;height:5px;border-radius:3px;background:var(--line)}
+#sheet.min{display:none}
+#handle{border:0;background:none;width:100%;height:40px;flex:none;display:flex;align-items:center;justify-content:center;gap:8px;color:var(--mut);font-size:13px;touch-action:manipulation}
+#handle::before{content:"";width:36px;height:5px;border-radius:3px;background:var(--line)}
+#peek{
+  position:fixed;left:50%;transform:translateX(-50%);z-index:1000;display:none;
+  bottom:calc(env(safe-area-inset-bottom,0px) + 84px);
+  background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:999px;padding:10px 18px;box-shadow:0 2px 12px #0008;
+}
+#sheet.min ~ #peek{display:block}
 #sheetbody{
   overflow-y:auto;overscroll-behavior:contain;
-  padding:0 max(16px,env(safe-area-inset-right)) max(16px,env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left));
+  padding:0 max(16px,env(safe-area-inset-right)) calc(env(safe-area-inset-bottom,0px) + 90px) max(16px,env(safe-area-inset-left));
   display:flex;flex-direction:column;gap:14px;
 }
-#sheet.min #sheetbody{display:none}
 .status{font-size:13px;color:var(--mut)}
 h2{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--mut);margin:0 0 6px;font-weight:600}
 .list{display:flex;flex-direction:column;gap:8px}
@@ -83,7 +86,7 @@ h2{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--mut)
 .pin.place{border-color:var(--pin-place)}
 .pin.home{border-color:var(--acc);border-width:3px}
 #toast{
-  position:fixed;left:50%;transform:translateX(-50%);top:calc(max(8px,env(safe-area-inset-top)) + 112px);z-index:1200;
+  position:fixed;left:50%;transform:translateX(-50%);top:calc(max(6px,env(safe-area-inset-top)) + 82px);z-index:1200;
   background:var(--fg);color:var(--bg);padding:8px 14px;border-radius:999px;font-size:14px;opacity:0;pointer-events:none;transition:opacity .25s;max-width:90vw;text-align:center
 }
 #toast.on{opacity:1}
@@ -98,7 +101,8 @@ h2{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--mut)
     <span id="face" aria-hidden="true">🙂</span>
     <strong id="money">0 €</strong>
     <span class="sp"></span>
-    <button id="recenter" aria-label="Recentrer sur moi">◎</button>
+    <button id="music" class="round" aria-label="Musique" aria-pressed="true">♪</button>
+    <button id="recenter" class="round" aria-label="Recentrer sur moi">◎</button>
   </div>
   <div class="bars">
     <div class="bar" style="--c:var(--e)"><span>Énergie <em id="v-energy"></em></span><i><b id="b-energy"></b></i></div>
@@ -111,9 +115,10 @@ h2{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--mut)
 <div id="toast" role="status" aria-live="polite"></div>
 
 <section id="sheet" aria-label="Actions">
-  <button id="handle" aria-label="Réduire ou agrandir le tiroir"></button>
+  <button id="handle" aria-label="Masquer le tiroir">Masquer</button>
   <div id="sheetbody"></div>
 </section>
+<button id="peek" aria-label="Afficher le tiroir">Actions ▲</button>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
@@ -288,32 +293,58 @@ async function ensureData() {
   loading = true; dataMsg = 'Chargement des alentours…'; renderSheet();
   const c = { lat: S.pos.lat, lng: S.pos.lng };
   const a = `(around:${QUERY_R},${c.lat},${c.lng})`;
-  const q = `[out:json][timeout:25];
-node${a}["natural"="tree"]->.trees;
-(way${a}["natural"="wood"];way${a}["landuse"="forest"];way${a}["waterway"~"^(river|stream|canal)$"];way${a}["natural"~"^(water|coastline)$"];way${a}["leisure"~"^(park|garden)$"];)->.areas;
-(node${a}["shop"~"^(bakery|fishmonger)$"];way${a}["shop"~"^(bakery|fishmonger)$"];node${a}["amenity"~"^(cafe|bar|pub|cinema|restaurant|fast_food)$"];way${a}["amenity"~"^(cafe|bar|pub|cinema|restaurant|fast_food)$"];)->.places;
-.trees out 40;
-.areas out geom 60;
-.places out geom 120;`;
-  try {
-    const ctl = new AbortController();
-    const to = setTimeout(() => ctl.abort(), 28000);
-    const r = await fetch('https://overpass-api.de/api/interpreter', {
-      method: 'POST', body: 'data=' + encodeURIComponent(q), signal: ctl.signal
-    });
-    clearTimeout(to);
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    const j = await r.json();
-    items = parseOSM(j.elements || [], c);
-    cache = { lat: c.lat, lng: c.lng, ts: Date.now(), items };
-    try { localStorage.setItem(CKEY, JSON.stringify(cache)); } catch (e) {}
-    dataMsg = '';
-  } catch (e) {
-    lastFail = Date.now();
-    dataMsg = 'Alentours indisponibles (réseau ou service saturé). Nouvel essai dans 1 min.';
+  const head = '[out:json][timeout:20];';
+  // Trois petites requêtes : si l'une échoue, les autres s'affichent quand même.
+  const queries = [
+    head + `node${a}["natural"="tree"];out 40;`,
+    head + `(way${a}["natural"="wood"];way${a}["landuse"="forest"];way${a}["waterway"~"^(river|stream|canal)$"];way${a}["natural"~"^(water|coastline)$"];way${a}["leisure"~"^(park|garden)$"];);out geom 60;`,
+    head + `(node${a}["shop"~"^(bakery|fishmonger)$"];way${a}["shop"~"^(bakery|fishmonger)$"];node${a}["amenity"~"^(cafe|bar|pub|cinema|restaurant|fast_food)$"];way${a}["amenity"~"^(cafe|bar|pub|cinema|restaurant|fast_food)$"];);out geom 120;`
+  ];
+  const res = await Promise.allSettled(queries.map(overpass));
+  const ok = res.filter(r => r.status === 'fulfilled');
+  const bad = res.find(r => r.status === 'rejected');
+  if (ok.length) {
+    items = parseOSM(ok.flatMap(r => r.value), c);
+    if (!bad) {
+      cache = { lat: c.lat, lng: c.lng, ts: Date.now(), items };
+      try { localStorage.setItem(CKEY, JSON.stringify(cache)); } catch (e) {}
+    }
   }
+  if (bad) {
+    lastFail = Date.now() - 40000; // nouvel essai dans ~20 s
+    dataMsg = 'Chargement incomplet (' + (bad.reason && bad.reason.message || 'erreur réseau') + '). Nouvel essai bientôt.';
+  } else dataMsg = '';
   loading = false;
   drawItems(); collect(); renderSheet();
+}
+
+const OVERPASS = [
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass.private.coffee/api/interpreter'
+];
+async function overpass(q) {
+  let lastErr = null;
+  for (const url of OVERPASS) {
+    const ctl = new AbortController();
+    const to = setTimeout(() => ctl.abort(), 22000);
+    try {
+      const r = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+        body: 'data=' + encodeURIComponent(q),
+        signal: ctl.signal
+      });
+      clearTimeout(to);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const j = await r.json();
+      return j.elements || [];
+    } catch (e) {
+      clearTimeout(to);
+      lastErr = e.name === 'AbortError' ? new Error('délai dépassé') : e;
+    }
+  }
+  throw lastErr || new Error('erreur réseau');
 }
 
 /* ---------- Carte ---------- */
@@ -325,9 +356,9 @@ let player = null, actionC = null, visionC = null, homeM = null, follow = true;
 
 function ensureMarkers() {
   if (player) return;
-  visionC = L.circle([0, 0], { radius: VISION_R, color: '#2d7a4d', weight: 1, dashArray: '4 6', fillOpacity: 0.03, interactive: false }).addTo(map);
-  actionC = L.circle([0, 0], { radius: ACTION_R, color: '#2d7a4d', weight: 2, fillOpacity: 0.12, interactive: false }).addTo(map);
-  player = L.circleMarker([0, 0], { radius: 8, color: '#fff', weight: 3, fillColor: '#2d7a4d', fillOpacity: 1, interactive: false }).addTo(map);
+  visionC = L.circle([0, 0], { radius: VISION_R, color: '#5fbf86', weight: 1, dashArray: '4 6', fillOpacity: 0.03, interactive: false }).addTo(map);
+  actionC = L.circle([0, 0], { radius: ACTION_R, color: '#5fbf86', weight: 2, fillOpacity: 0.12, interactive: false }).addTo(map);
+  player = L.circleMarker([0, 0], { radius: 8, color: '#fff', weight: 3, fillColor: '#5fbf86', fillOpacity: 1, interactive: false }).addTo(map);
 }
 function pin(def, cls) {
   return L.divIcon({ className: '', html: `<div class="pin ${cls}">${def.icon}</div>`, iconSize: [30, 30], iconAnchor: [15, 15] });
@@ -563,7 +594,104 @@ $('sheetbody').addEventListener('click', e => {
     }
   }
 });
-$('handle').addEventListener('click', () => $('sheet').classList.toggle('min'));
+$('handle').addEventListener('click', () => $('sheet').classList.add('min'));
+$('peek').addEventListener('click', () => $('sheet').classList.remove('min'));
+
+/* ---------- Musique douce générée (aucun fichier, aucun droit) ---------- */
+const Music = (() => {
+  let ctx = null, master = null, bus = null, timer = null, running = false, step = 0, chordI = 0;
+  const CHORDS = [
+    { bass: 36, pool: [60, 64, 67, 71, 72, 74, 76] },
+    { bass: 33, pool: [57, 60, 64, 67, 69, 72, 76] },
+    { bass: 41, pool: [60, 65, 69, 72, 74, 77] },
+    { bass: 43, pool: [59, 62, 67, 71, 74, 76] }
+  ];
+  const hz = m => 440 * Math.pow(2, (m - 69) / 12);
+  function build() {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return false;
+    ctx = new AC();
+    master = ctx.createGain(); master.gain.value = 0; master.connect(ctx.destination);
+    const len = Math.floor(ctx.sampleRate * 3.5), buf = ctx.createBuffer(2, len, ctx.sampleRate);
+    for (let c = 0; c < 2; c++) {
+      const d = buf.getChannelData(c);
+      for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.5);
+    }
+    const conv = ctx.createConvolver(); conv.buffer = buf;
+    const wet = ctx.createGain(); wet.gain.value = 0.8; conv.connect(wet); wet.connect(master);
+    bus = ctx.createBiquadFilter(); bus.type = 'lowpass'; bus.frequency.value = 1700;
+    bus.connect(master); bus.connect(conv);
+    return true;
+  }
+  function note(m, dur, vel, delay) {
+    const t = ctx.currentTime + 0.05 + (delay || 0);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(vel, t + 0.03);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    g.connect(bus);
+    [['triangle', 1, 1], ['sine', 2, 0.25]].forEach(([type, mul, lvl]) => {
+      const o = ctx.createOscillator(); o.type = type;
+      o.frequency.value = hz(m) * mul; o.detune.value = (Math.random() - 0.5) * 6;
+      const og = ctx.createGain(); og.gain.value = lvl;
+      o.connect(og); og.connect(g);
+      o.start(t); o.stop(t + dur + 0.1);
+    });
+  }
+  function pad(m, dur, vel) {
+    const t = ctx.currentTime + 0.05;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(vel, t + 3);
+    g.gain.linearRampToValueAtTime(0.0001, t + dur);
+    g.connect(bus);
+    const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.value = hz(m);
+    o.connect(g); o.start(t); o.stop(t + dur + 0.1);
+  }
+  function next() {
+    if (!running) return;
+    const ch = CHORDS[chordI % CHORDS.length];
+    const pick = () => ch.pool[Math.floor(Math.random() * ch.pool.length)];
+    if (step % 7 === 0) { pad(ch.bass, 12, 0.08); pad(ch.bass + 12, 12, 0.035); }
+    note(pick(), 5 + Math.random() * 2, 0.07 + Math.random() * 0.05);
+    if (Math.random() < 0.3) note(pick(), 5, 0.05 + Math.random() * 0.03, 0.9);
+    step++;
+    if (step % 7 === 0) chordI++;
+    timer = setTimeout(next, 2200 + Math.random() * 3200);
+  }
+  return {
+    get running() { return running; },
+    start() {
+      if (!ctx && !build()) return;
+      ctx.resume();
+      running = true;
+      master.gain.setTargetAtTime(0.7, ctx.currentTime, 1.5);
+      clearTimeout(timer); next();
+    },
+    stop() {
+      running = false; clearTimeout(timer);
+      if (ctx) master.gain.setTargetAtTime(0, ctx.currentTime, 0.4);
+    },
+    pause() { if (ctx && running) ctx.suspend(); },
+    resume() { if (ctx && running) ctx.resume(); }
+  };
+})();
+function syncMusicBtn() { $('music').setAttribute('aria-pressed', String(S.music !== false)); }
+function unlockAudio() {
+  document.removeEventListener('touchend', unlockAudio);
+  document.removeEventListener('click', unlockAudio);
+  if (S.music !== false) Music.start();
+}
+document.addEventListener('touchend', unlockAudio);
+document.addEventListener('click', unlockAudio);
+$('music').addEventListener('click', () => {
+  S.music = S.music === false;
+  save(); syncMusicBtn();
+  if (S.music) Music.start(); else Music.stop();
+  toast(S.music ? 'Musique activée' : 'Musique coupée');
+});
+document.addEventListener('visibilitychange', () => { if (document.hidden) Music.pause(); else Music.resume(); });
+syncMusicBtn();
 $('recenter').addEventListener('click', () => { follow = true; if (S.pos) map.setView([S.pos.lat, S.pos.lng], Math.max(map.getZoom(), 17)); });
 
 /* ---------- Démarrage ---------- */
